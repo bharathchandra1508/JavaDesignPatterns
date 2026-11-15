@@ -1,6 +1,7 @@
 # Java Design Patterns
 
 - [Strategy Pattern](#Strategy Pattern)
+- [Observer Pattern](#Observer Pattern)
 
 # Strategy Pattern
 
@@ -19,6 +20,8 @@ A small Spring Boot service that demonstrates the **Strategy pattern** for payme
 - [Adding a New Payment Method](#adding-a-new-payment-method)
 
 ---
+
+![Class Diagram](docs/images/strategy_pattern.png)
 
 ## Project Structure
 
@@ -253,6 +256,257 @@ public class WalletPayment implements PaymentStrategy {
     @Override
     public void pay(double amount) {
         System.out.printf("Paid %.2f via Wallet%n", amount);
+    }
+}
+```
+
+# Observer Pattern
+
+A small Spring Boot service that demonstrates the **Observer pattern**. When an order is placed, the subject notifies every registered observer (inventory, email, analytics) without knowing what any of them do. New observers are added without changing the code that places orders.
+
+---
+
+![Class Diagram](docs/images/observer_pattern.png)
+
+## Table of Contents
+
+- [Project Structure](#project-structure)
+- [How It Works](#how-it-works)
+- [Startup Flow](#startup-flow)
+- [Request Flow](#request-flow)
+- [Running the Application](#running-the-application)
+- [API Reference](#api-reference)
+- [Adding a New Observer](#adding-a-new-observer)
+
+---
+
+## Project Structure
+
+```
+src/main/java/com/designpatterns/samples/observerpattern/
+├── ObserverPatternApplication.java     # Spring Boot entry point
+├── api/
+│   ├── OrderController.java            # POST /orders
+│   └── OrderRequest.java               # Request body (record)
+├── order/
+│   ├── OrderService.java               # Places orders, triggers the event
+│   └── OrderPlacedEvent.java           # Event payload (record)
+├── observer/
+│   ├── OrderObserver.java              # Observer interface
+│   └── OrderEventPublisher.java        # Subject: holds and notifies observers
+└── observers/
+    ├── InventoryObserver.java          # Reserves stock
+    ├── EmailObserver.java              # Sends confirmation
+    └── AnalyticsObserver.java          # Records the sale
+```
+
+---
+
+## How It Works
+
+| Role | Class | Responsibility |
+|------|-------|----------------|
+| Subject | `OrderEventPublisher` | Holds the observers and notifies each one |
+| Observer interface | `OrderObserver` | Defines `onOrderPlaced(event)` |
+| Concrete observers | `InventoryObserver`, `EmailObserver`, `AnalyticsObserver` | React to the event in their own way |
+| Trigger | `OrderService` | Creates the event and hands it to the subject |
+
+Spring finds every `OrderObserver` bean and passes the full list into `OrderEventPublisher`'s constructor. The publisher calls each observer in turn. If one observer throws an exception, the publisher logs it and continues with the rest.
+
+---
+
+## Startup Flow
+
+What happens from `main()` until the server accepts requests:
+
+```
+ java -jar / IDE Run
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ ObserverPatternApplication.main         │
+│   SpringApplication.run(...)            │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ @SpringBootApplication                  │
+│   component scan from root package down │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ Component scan registers beans:         │
+│   @Component  InventoryObserver         │
+│   @Component  EmailObserver             │
+│   @Component  AnalyticsObserver         │
+│   @Component  OrderEventPublisher       │
+│   @Service    OrderService              │
+│   @RestController OrderController       │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ Bean creation (dependency injection)    │
+│   1. Create the three observer beans    │
+│      (no dependencies)                  │
+│   2. Create OrderEventPublisher and     │
+│      inject List<OrderObserver> with    │
+│      all three observers                │
+│   3. Create OrderService and inject     │
+│      the publisher                      │
+│   4. Create OrderController and inject  │
+│      the service                        │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ Publisher constructor runs              │
+│   logs "Registered 3 order observers"   │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ Embedded Tomcat starts on port 8080     │
+│ Ready to accept requests                │
+└─────────────────────────────────────────┘
+```
+
+**Key point:** observers are registered once, at startup. The subject never looks them up by name, so it doesn't need to change when observers are added.
+
+---
+
+## Request Flow
+
+What happens when a client calls `POST /orders`:
+
+```
+ Client
+   │  POST /orders
+   │  {"item":"Laptop","amount":1499}
+   ▼
+┌─────────────────────────────────────────┐
+│ Tomcat → DispatcherServlet              │
+│   matches URL and HTTP method           │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ Jackson deserializes JSON into          │
+│ OrderRequest(item, amount)              │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ OrderController.placeOrder(request)     │
+│   calls orderService.placeOrder()       │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ OrderService.placeOrder(request)        │
+│   1. generate orderId                   │
+│   2. persist order (omitted in sample)  │
+│   3. publisher.publish(OrderPlacedEvent)│
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│ OrderEventPublisher.publish(event)      │
+│   for each observer in the list:        │
+└──────────────┬──────────────────────────┘
+               │
+       ┌───────┼──────────────────┐
+       ▼       ▼                  ▼
+┌────────────┐ ┌────────────┐ ┌────────────────┐
+│ Inventory  │ │ Email      │ │ Analytics      │
+│ Observer   │ │ Observer   │ │ Observer       │
+│ logs       │ │ logs       │ │ logs           │
+└─────┬──────┘ └─────┬──────┘ └───────┬────────┘
+      │  exception?  │                │
+      │  → logged,   │                │
+      │    loop goes │                │
+      │    on        │                │
+      └──────┬───────┴────────────────┘
+             ▼
+┌─────────────────────────────────────────┐
+│ OrderService returns orderId            │
+└──────────────┬──────────────────────────┘
+               ▼
+┌─────────────────────────────────────────┐
+│ 201 Created  {"orderId":"3f2a…"}        │
+└─────────────────────────────────────────┘
+```
+
+**Key point:** the observers run synchronously, before the response is returned. An observer that is slow (for example, sending an email) delays the response unless it runs asynchronously.
+
+---
+
+## Running the Application
+
+**Prerequisites:** JDK 17+, Maven 3.8+ (or the IntelliJ bundled Maven).
+
+From IntelliJ:
+1. Right-click `pom.xml` → **Maven → Reload Project**.
+2. Run `ObserverPatternApplication`.
+
+From the command line:
+
+```bash
+mvn spring-boot:run
+```
+
+---
+
+## API Reference
+
+### `POST /orders`
+
+**Request body**
+
+| Field | Type | Required | Example |
+|-------|------|----------|---------|
+| `item` | string | yes | `"Laptop"` |
+| `amount` | number | yes | `1499` |
+
+**Responses**
+
+| Status | Body |
+|--------|------|
+| `201 Created` | `{"orderId": "3f2a…"}` |
+
+**Example**
+
+```bash
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"item":"Laptop","amount":1499}'
+```
+
+Console output (timestamps omitted):
+
+```
+Inventory: reserved 1 x Laptop for order 3f2a…
+Email: confirmation sent for order 3f2a…
+Analytics: recorded sale of 1499.00
+```
+
+---
+
+## Adding a New Observer
+
+1. Create a class in `observers/` annotated with `@Component`.
+2. Implement `OrderObserver` and write `onOrderPlaced()`.
+
+No other file changes. Spring registers the bean, and the publisher calls it on every order.
+
+```java
+@Component
+public class LoyaltyObserver implements OrderObserver {
+
+    @Override
+    public void onOrderPlaced(OrderPlacedEvent event) {
+        // award loyalty points
     }
 }
 ```
